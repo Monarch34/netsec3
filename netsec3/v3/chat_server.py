@@ -246,17 +246,38 @@ def server(port):
                 logging.info(f"Processing AUTH_REQUEST for username '{username}' from {client_addr}")
                 user_data = user_credentials_cr.get(username)
                 if user_data:
-                    server_challenge = crypto_utils.generate_salt(16).hex()
-                    session["pending_challenge"] = server_challenge
-                    session["pending_auth_username"] = username
-                    challenge_payload = {"type": "AUTH_CHALLENGE", "challenge": server_challenge,
-                                         "salt": user_data["salt"],
-                                         "pbkdf2_iterations": user_data.get("pbkdf2_iterations",
-                                                                            crypto_utils.PBKDF2_ITERATIONS),
-                                         "pbkdf2_key_length": user_data.get("pbkdf2_key_length",
-                                                                            crypto_utils.PBKDF2_KEY_LENGTH)}
-                    send_encrypted_response(sock, client_addr, current_channel_sk, challenge_payload)
-                    logging.info(f"Sent AUTH_CHALLENGE to '{username}'@{client_addr}")
+                    # check if username already logged in elsewhere
+                    already_online = any(
+                        s.get("username") == username and addr != client_addr
+                        for addr, s in client_sessions.items()
+                    )
+                    if already_online:
+                        logging.info(
+                            f"AUTH_REQUEST denied for '{username}' from {client_addr}: user already online"
+                        )
+                        send_encrypted_response(
+                            sock,
+                            client_addr,
+                            current_channel_sk,
+                            {"type": "AUTH_RESULT", "success": False, "detail": "User already signed in."},
+                        )
+                    else:
+                        server_challenge = crypto_utils.generate_salt(16).hex()
+                        session["pending_challenge"] = server_challenge
+                        session["pending_auth_username"] = username
+                        challenge_payload = {
+                            "type": "AUTH_CHALLENGE",
+                            "challenge": server_challenge,
+                            "salt": user_data["salt"],
+                            "pbkdf2_iterations": user_data.get(
+                                "pbkdf2_iterations", crypto_utils.PBKDF2_ITERATIONS
+                            ),
+                            "pbkdf2_key_length": user_data.get(
+                                "pbkdf2_key_length", crypto_utils.PBKDF2_KEY_LENGTH
+                            ),
+                        }
+                        send_encrypted_response(sock, client_addr, current_channel_sk, challenge_payload)
+                        logging.info(f"Sent AUTH_CHALLENGE to '{username}'@{client_addr}")
                 else:
                     logging.warning(f"AUTH_REQUEST for unknown user '{username}' from {client_addr}")
                     send_encrypted_response(sock, client_addr, current_channel_sk,
@@ -283,10 +304,21 @@ def server(port):
                         verifier_b = bytes.fromhex(user_data["verifier"])
                         expected_proof_b = crypto_utils.compute_hmac_sha256(verifier_b, server_challenge)
                         if hmac.compare_digest(expected_proof_b, client_proof_b):
-                            session["username"] = username
-                            session["authenticated_at"] = time.time()
-                            auth_res_payload.update({"success": True, "detail": f"Welcome back, {username}!"})
-                            logging.info(f"Authentication SUCCESS for '{username}'@{client_addr}")
+                            # ensure username not already active (race condition check)
+                            already_online = any(
+                                s.get("username") == username and addr != client_addr
+                                for addr, s in client_sessions.items()
+                            )
+                            if already_online:
+                                auth_res_payload["detail"] = "User already signed in."
+                                logging.info(
+                                    f"AUTH_RESPONSE denied for '{username}' from {client_addr}: user already online"
+                                )
+                            else:
+                                session["username"] = username
+                                session["authenticated_at"] = time.time()
+                                auth_res_payload.update({"success": True, "detail": f"Welcome back, {username}!"})
+                                logging.info(f"Authentication SUCCESS for '{username}'@{client_addr}")
                         else:
                             auth_res_payload["detail"] = "Invalid credentials (proof mismatch)."
                             logging.warning(f"Authentication FAIL (proof mismatch) for '{username}'@{client_addr}")

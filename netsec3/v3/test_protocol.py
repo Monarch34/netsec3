@@ -159,6 +159,25 @@ class ChatProtocolTest(unittest.TestCase):
         ack = recv_payload(self.sock1, self.sk1)
         self.assertEqual(ack.get("status"), "BROADCAST_FAIL")
 
+    def test_duplicate_signin(self):
+        sign_up_and_sign_in(self.sock1, self.sk1, "dupuser", "password1")
+
+        # second socket tries to sign in with same username
+        send_command(self.sock2, self.sk2, "AUTH_REQUEST", {"username": "dupuser"})
+        resp = recv_payload(self.sock2, self.sk2)
+        self.assertEqual(resp.get("success"), False)
+        self.assertIn("already", resp.get("detail", ""))
+
+    def test_message_to_offline_user(self):
+        sign_up_and_sign_in(self.sock1, self.sk1, "user1", "password1")
+        send_command(self.sock2, self.sk2, "SECURE_SIGNUP", {"username": "user2", "password": "password2"})
+        recv_payload(self.sock2, self.sk2)
+
+        # user1 signed in, user2 offline
+        send_command(self.sock1, self.sk1, "SECURE_MESSAGE", {"to_user": "user2", "content": "hi", "timestamp": str(time.time())})
+        ack = recv_payload(self.sock1, self.sk1)
+        self.assertEqual(ack.get("status"), "MESSAGE_FAIL")
+
 
 if __name__ == "__main__":
     unittest.main()
