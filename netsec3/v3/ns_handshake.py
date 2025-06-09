@@ -36,7 +36,9 @@ def request_session_key(sock: Any, server_address: tuple[str, int], peer: str) -
     nonce1 = base64.b64encode(generate_nonce_bytes()).decode()
     handshake_events[peer] = threading.Event()
     session_keys[peer] = {"nonce1": nonce1, "state": "req"}
-    sock.sendto(f"NS_REQ:{peer}:{nonce1}".encode(), server_address)
+    plain = f"{peer}:{nonce1}".encode()
+    enc = crypto_utils.encrypt_aes_gcm(channel_sk, plain)
+    sock.sendto(f"NS_REQ:{enc}".encode(), server_address)
 
 
 def send_relay_message(sock: Any, server_addr: tuple[str, int], header: str, peer: str, sender: str, *parts: str) -> None:

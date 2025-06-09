@@ -21,7 +21,7 @@ This project implements an encrypted UDP chat server and client using Python.
 
 ## Tests
 
-The test suite uses `pytest` and also runs `flake8` for linting.
+The test suite uses `pytest`.
 
 ```bash
 pytest -q
