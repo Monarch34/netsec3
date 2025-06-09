@@ -1,4 +1,4 @@
-# chat_server.py
+"""Secure chat server handling ECDH key exchange and encrypted chat."""
 import socket
 import sys
 import logging

@@ -39,6 +39,7 @@ USERNAME_PATTERN = config.USERNAME_PATTERN
 KEY_EXCHANGE_TIMEOUT = int(os.getenv("KEY_EXCHANGE_TIMEOUT", 10))
 RECEIVE_TIMEOUT = float(os.getenv("RECEIVE_TIMEOUT", 1.0))
 AUTH_TIMEOUT = int(os.getenv("AUTH_TIMEOUT", 5))
+LOGOUT_TIMEOUT = int(os.getenv("LOGOUT_TIMEOUT", 3))
 LOG_FILE = os.getenv("CLIENT_LOG_FILE", "client.log")
 CUSTOM_PROMPT = os.getenv("CHAT_PROMPT", "] ")
 NS_NONCE_SIZE = crypto_utils.AES_GCM_NONCE_SIZE
@@ -53,6 +54,7 @@ class ClientConfig:
     key_exchange_timeout: int = KEY_EXCHANGE_TIMEOUT
     receive_timeout: float = RECEIVE_TIMEOUT
     auth_timeout: int = AUTH_TIMEOUT
+    logout_timeout: int = LOGOUT_TIMEOUT
     username_pattern: str = USERNAME_PATTERN
     log_file: str = LOG_FILE
     prompt: str = CUSTOM_PROMPT
@@ -72,6 +74,7 @@ key_exchange_complete = threading.Event()
 
 auth_challenge_data = None
 auth_successful_event = threading.Event()
+logout_ack_event = threading.Event()
 
 server_addr_global: tuple[str, int] | None = None
 session_keys: dict[str, dict] = {}
@@ -602,9 +605,12 @@ def handle_encrypted_payload(payload: dict) -> None:
         if payload.get("success"):
             is_authenticated = False
             client_username = None
+            channel_sk = None
+            key_exchange_complete.clear()
             console.print("<Server> Signed out successfully.", style="server")
         else:
             console.print(f"<Server> Signout failed: {msg_detail}", style="error")
+        logout_ack_event.set()
 
     elif msg_type == "SERVER_ERROR":
         console.print(f"<Server> Error: {msg_detail}", style="error")
@@ -908,12 +914,17 @@ def handle_logout(sock: socket.socket, server_address: tuple[str, int]) -> None:
         console.print("<System> Error: not signed in.", style="error")
         return
 
+    logout_ack_event.clear()
     send_secure_command(sock, server_address, "SIGNOUT", {"nonce": generate_nonce()})
-    is_authenticated = False
-    client_username = None
-    channel_sk = None
-    key_exchange_complete.clear()
-    console.print("<System> Logged out.", style="system")
+    wait_start = time.time()
+    while (
+        not logout_ack_event.is_set()
+        and time.time() - wait_start < config.logout_timeout
+        and not stop_event.is_set()
+    ):
+        time.sleep(0.1)
+    if not logout_ack_event.is_set():
+        console.print("<System> Logout timed out.", style="error")
 
 
 def handle_users(sock: socket.socket, server_address: tuple[str, int]) -> None:
