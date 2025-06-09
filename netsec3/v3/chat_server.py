@@ -7,6 +7,7 @@ import os
 import time
 import base64
 import hmac
+import threading
 
 try:
     from . import crypto_utils
@@ -30,12 +31,36 @@ logging.basicConfig(
     format="%(asctime)s - SERVER - %(levelname)s - %(message)s",
 )
 
-user_credentials_cr = {}
-# Reuse data structures from server_utils so helper functions can access them
-client_sessions = server_utils.client_sessions
-active_usernames = server_utils.active_usernames
 CREDENTIALS_FILE = config.CREDENTIALS_FILE
 RELAY_HEADERS = config.RELAY_HEADERS
+
+# Default global containers used by ``server``. They will be replaced by
+# ``ChatServer.run``.
+client_sessions: dict[tuple[str, int], dict] = {}
+active_usernames: dict[str, tuple[str, int]] = {}
+user_credentials_cr: dict = {}
+
+
+class ChatServer:
+    """Wrapper that encapsulates server state."""
+
+    def __init__(self, port: int):
+        self.port = port
+        self.client_sessions: dict[tuple[str, int], dict] = {}
+        self.active_usernames: dict[str, tuple[str, int]] = {}
+        self.user_credentials_cr: dict = {}
+        self.stop_event = threading.Event()
+
+    def run(self) -> None:
+        global client_sessions, active_usernames, user_credentials_cr
+        client_sessions = self.client_sessions
+        active_usernames = self.active_usernames
+        user_credentials_cr = self.user_credentials_cr
+        server_utils.reset_caches()
+        server(self.port, self.stop_event)
+
+    def stop(self) -> None:
+        self.stop_event.set()
 
 
 
@@ -65,21 +90,28 @@ def save_cr_credentials():
 
 
 
-def server(port):
+def server(port, stop_event=None):
     """Run the UDP chat server on the given port."""
+    if stop_event is None:
+        stop_event = threading.Event()
     load_cr_credentials()
 
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind(('', port))
+        sock.settimeout(1.0)
         logging.info(f"Secure ECDH+CR server started on port {port}...")
     except Exception as e:
         logging.critical(f"Server startup error: {e}", exc_info=True)
 
-    while True:
+    while not stop_event.is_set():
+        client_addr = None
         try:
             data, client_addr = sock.recvfrom(4096)
+        except socket.timeout:
+            continue
+        try:
             message_str = data.decode('utf-8')
             client_ip = client_addr[0]
             logging.debug(f"Raw from {client_addr}: '{message_str[:100]}...'")  # DEBUG for raw messages
@@ -121,7 +153,9 @@ def server(port):
             session["last_seen"] = time.time()
 
             if command_header in RELAY_HEADERS:
-                server_utils.relay_raw(sock, command_header, client_addr, payload_b64_str)
+                server_utils.relay_raw(
+                    sock, command_header, client_addr, payload_b64_str, client_sessions
+                )
                 continue
 
             if command_header == "NS_REQ":
@@ -303,7 +337,7 @@ def server(port):
                                         {"type": "SIGNOUT_RESULT", "success": True,
                                          "detail": "Signed out."})
                 if username:
-                    server_utils.notify_user_logout(sock, username)
+                    server_utils.notify_user_logout(sock, username, client_sessions)
 
             elif command_header == "SECURE_MESSAGE":
                 to_user = req_payload.get("to_user")
@@ -368,7 +402,7 @@ def server(port):
                                          "detail": f"Unknown or unsupported command: {command_header}"})
 
         except ConnectionResetError:
-            if client_addr in client_sessions:
+            if client_addr and client_addr in client_sessions:
                 username_left = client_sessions[client_addr].get('username')
                 logging.info(
                     f"Client {username_left or client_addr} disconnected (ConnectionResetError). Session removed.")
@@ -376,17 +410,22 @@ def server(port):
                     del active_usernames[username_left]
                 del client_sessions[client_addr]
                 if username_left:
-                    server_utils.notify_user_logout(sock, username_left)
+                    server_utils.notify_user_logout(sock, username_left, client_sessions)
             else:
                 logging.warning(f"ConnectionResetError from {client_addr} (no active session).")
         except UnicodeDecodeError as ude:  # Should be less common now
             logging.error(f"UnicodeDecodeError from {client_addr}: {ude}. Raw data: {data[:60]}")
         except Exception as e:
             logging.error(f"Unexpected critical error processing data from {client_addr}: {e}", exc_info=True)
-            s_err = client_sessions.get(client_addr)  # Attempt to send encrypted error if session exists
+            s_err = client_sessions.get(client_addr) if client_addr else None
             if s_err and s_err.get("channel_sk"):
-                server_utils.send_encrypted_response(sock, client_addr, s_err["channel_sk"], {"type": "SERVER_ERROR",
-                                                                                 "detail": "An unexpected internal server error occurred. Please try again."})
+                server_utils.send_encrypted_response(
+                    sock,
+                    client_addr,
+                    s_err["channel_sk"],
+                    {"type": "SERVER_ERROR", "detail": "An unexpected internal server error occurred. Please try again."},
+                )
+    sock.close()
 
 
 if __name__ == "__main__":
@@ -397,7 +436,7 @@ if __name__ == "__main__":
         server_port = int(sys.argv[1])
         if not 1024 < server_port < 65536:
             raise ValueError("Port must be 1025-65535")
-        server(server_port)
+        ChatServer(server_port).run()
     except ValueError as e:
         print(f"Invalid port: {e}")
     except KeyboardInterrupt:

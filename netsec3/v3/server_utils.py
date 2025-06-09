@@ -29,6 +29,16 @@ request_tracker: dict[str, list[float]] = defaultdict(list)
 used_internal_nonces: dict[str, float] = {}
 
 
+def reset_caches() -> None:
+    """Reset rate limiting and nonce caches.
+
+    This is primarily used in tests where multiple server instances are
+    started sequentially in the same process.
+    """
+    request_tracker.clear()
+    used_internal_nonces.clear()
+
+
 def validate_username_format(username: str) -> bool:
     """Return True if the username matches the allowed format."""
     return isinstance(username, str) and bool(USERNAME_RE.fullmatch(username))
@@ -94,7 +104,13 @@ def send_encrypted_response(sock: Any, client_address: Tuple[str, int], channel_
     sock.sendto(enc_blob.encode("utf-8"), client_address)
 
 
-def relay_raw(sock: Any, header: str, sender_addr: Tuple[str, int], raw_blob: str) -> None:
+def relay_raw(
+    sock: Any,
+    header: str,
+    sender_addr: Tuple[str, int],
+    raw_blob: str,
+    client_sessions: Dict[Tuple[str, int], Dict[str, Any]],
+) -> None:
     """Relay an encrypted blob between two clients."""
     target, _, rest = raw_blob.partition(":")
     if not rest:
@@ -110,19 +126,22 @@ def relay_raw(sock: Any, header: str, sender_addr: Tuple[str, int], raw_blob: st
         return
     sock.sendto(f"{header}:{raw_blob}".encode("utf-8"), target_addr)
     sender_user = client_sessions.get(sender_addr, {}).get("username", sender_addr)
-    logging.info("Relayed %s from %s to %s (len=%d)", header, sender_user, target, len(raw_blob))
+    logging.info(
+        "Relayed %s from %s to %s (len=%d)", header, sender_user, target, len(raw_blob)
+    )
 
 
 # ---------------------------------------------------------------------------
 # Session tracking / notifications
 # ---------------------------------------------------------------------------
 
-# Client session tracking shared with server module
-client_sessions: Dict[Tuple[str, int], Dict[str, Any]] = {}
-active_usernames: Dict[str, Tuple[str, int]] = {}
+# Client session tracking is managed by ``ChatServer``
 
-
-def notify_user_logout(sock: Any, username: str) -> None:
+def notify_user_logout(
+    sock: Any,
+    username: str,
+    client_sessions: Dict[Tuple[str, int], Dict[str, Any]],
+) -> None:
     """Notify all connected clients that ``username`` signed out."""
     for addr, sess in list(client_sessions.items()):
         if (

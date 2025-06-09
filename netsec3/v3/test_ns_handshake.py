@@ -1,6 +1,6 @@
 import os
 import socket
-import subprocess
+import threading
 import sys
 import time
 import base64
@@ -8,6 +8,7 @@ import uuid
 import json
 
 from . import crypto_utils
+from .chat_server import ChatServer
 
 SERVER_PORT = 16000
 SERVER_ADDR = ("127.0.0.1", SERVER_PORT)
@@ -60,12 +61,14 @@ def sign_up_and_in(sock, sk, username, password):
 
 
 def run_server():
-    script = os.path.join(os.path.dirname(__file__), "chat_server.py")
-    return subprocess.Popen([sys.executable, script, str(SERVER_PORT)])
+    server = ChatServer(SERVER_PORT)
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    return server, thread
 
 
 def test_needham_schroeder_chat(tmp_path):
-    server = run_server()
+    server, thread = run_server()
     time.sleep(1.0)
     try:
         sock1 = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -155,14 +158,14 @@ def test_needham_schroeder_chat(tmp_path):
     finally:
         sock1.close()
         sock2.close()
-        server.terminate()
-        server.wait(timeout=5)
+        server.stop()
+        thread.join(timeout=5)
         if os.path.exists("user_credentials_ecdh_cr.json"):
             os.remove("user_credentials_ecdh_cr.json")
 
 
 def test_ns_req_offline_user(tmp_path):
-    server = run_server()
+    server, thread = run_server()
     time.sleep(1.0)
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -182,7 +185,7 @@ def test_ns_req_offline_user(tmp_path):
         assert parts[2] == "offline"
     finally:
         sock.close()
-        server.terminate()
-        server.wait(timeout=5)
+        server.stop()
+        thread.join(timeout=5)
         if os.path.exists("user_credentials_ecdh_cr.json"):
             os.remove("user_credentials_ecdh_cr.json")
