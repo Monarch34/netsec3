@@ -98,11 +98,10 @@ def server(port):
                     server_ecdh_private_key, server_ecdh_public_key_obj = crypto_utils.generate_ecdh_keys()
                     channel_sk_derived = crypto_utils.derive_shared_key_ecdh(server_ecdh_private_key,
                                                                              client_ecdh_public_key_obj)
-                    client_sessions[client_addr] = {
-                        "channel_sk": channel_sk_derived, "username": None,
-                        "authenticated_at": None, "last_seen": time.time(),
-                        "pending_challenge": None
-                    }
+                    client_sessions[client_addr] = server_utils.Session(
+                        channel_sk=channel_sk_derived,
+                        last_seen=time.time(),
+                    )
                     server_ecdh_public_key_b64 = crypto_utils.serialize_ecdh_public_key(server_ecdh_public_key_obj)
                     response_key_exchange = f"DH_RESPONSE:{server_ecdh_public_key_b64}"
                     sock.sendto(response_key_exchange.encode('utf-8'), client_addr)
@@ -112,13 +111,13 @@ def server(port):
                 continue
 
             session = client_sessions.get(client_addr)
-            if not session or not session.get("channel_sk"):
+            if not session or not session.channel_sk:
                 logging.warning(
                     f"Command '{command_header}' from {client_addr} without established ChannelSK. Ignoring.")
                 continue
 
-            current_channel_sk = session["channel_sk"]
-            session["last_seen"] = time.time()
+            current_channel_sk = session.channel_sk
+            session.last_seen = time.time()
 
             if command_header in RELAY_HEADERS:
                 server_utils.relay_raw(sock, command_header, client_addr, payload_b64_str)
@@ -132,12 +131,12 @@ def server(port):
                     logging.warning("Failed to process NS_REQ from %s: %s", client_addr, e)
                     continue
                 logging.info(
-                    "Received NS_REQ from %s for peer %s", session.get("username"), peer
+                    "Received NS_REQ from %s for peer %s", session.username, peer
                 )
                 target_addr, target_sk = None, None
                 for addr, s_data in client_sessions.items():
-                    if s_data.get("username") == peer and s_data.get("channel_sk"):
-                        target_addr, target_sk = addr, s_data["channel_sk"]
+                    if s_data.username == peer and s_data.channel_sk:
+                        target_addr, target_sk = addr, s_data.channel_sk
                         break
                 if not (target_addr and target_sk):
                     logging.info("NS_REQ for offline user %s from %s", peer, client_addr)
@@ -146,7 +145,7 @@ def server(port):
                 session_key = os.urandom(crypto_utils.AES_KEY_SIZE)
                 ticket_bytes = crypto_utils.serialize_payload({
                     "K_AB": base64.b64encode(session_key).decode(),
-                    "sender": session.get("username"),
+                    "sender": session.username,
                 })
                 ticket = crypto_utils.encrypt_aes_gcm(target_sk, ticket_bytes)
                 resp_bytes = crypto_utils.serialize_payload({
@@ -157,7 +156,7 @@ def server(port):
                 })
                 enc_blob = crypto_utils.encrypt_aes_gcm(current_channel_sk, resp_bytes)
                 sock.sendto(f"NS_RESP:{peer}:{enc_blob}".encode("utf-8"), client_addr)
-                logging.info("Issued session key for %s -> %s", session.get("username"), peer)
+                logging.info("Issued session key for %s -> %s", session.username, peer)
                 continue
 
             try:
@@ -208,8 +207,8 @@ def server(port):
                                              "detail": "User already signed in."})
                 elif user_data:
                     server_challenge = crypto_utils.generate_salt(16).hex()
-                    session["pending_challenge"] = server_challenge
-                    session["pending_auth_username"] = username
+                    session.pending_challenge = server_challenge
+                    session.pending_auth_username = username
                     challenge_payload = {"type": "AUTH_CHALLENGE", "challenge": server_challenge,
                                          "salt": user_data["salt"],
                                          "pbkdf2_iterations": user_data.get("pbkdf2_iterations",
@@ -226,8 +225,8 @@ def server(port):
             elif command_header == "AUTH_RESPONSE":
                 client_proof_b64 = req_payload.get("challenge_response")
                 client_req_nonce = req_payload.get("client_nonce")
-                username = session.get("pending_auth_username")
-                server_challenge = session.get("pending_challenge")
+                username = session.pending_auth_username
+                server_challenge = session.pending_challenge
                 user_data = user_credentials_cr.get(username) if username else None
                 logging.info(f"Processing AUTH_RESPONSE for '{username}' from {client_addr}")
 
@@ -248,11 +247,14 @@ def server(port):
                                 auth_res_payload["detail"] = "User already signed in."
                                 logging.info(f"AUTH_RESPONSE denied for '{username}' from {client_addr}: already signed in")
                             else:
-                                session["username"] = username
-                                session["authenticated_at"] = time.time()
+                                session.username = username
+                                session.authenticated_at = time.time()
                                 active_usernames[username] = client_addr
                                 auth_res_payload.update({"success": True, "detail": f"Welcome back, {username}!"})
-                                logging.info(f"Authentication SUCCESS for '{username}'@{client_addr}")
+                                logging.info(
+                                    f"Authentication SUCCESS for '{username}'@{client_addr}"
+                                )
+                                server_utils.notify_user_login(sock, username)
                         else:
                             auth_res_payload["detail"] = "Invalid credentials (proof mismatch)."
                             logging.warning(f"Authentication FAIL (proof mismatch) for '{username}'@{client_addr}")
@@ -260,25 +262,25 @@ def server(port):
                         auth_res_payload["detail"] = "Error verifying proof. Please try again."
                         logging.error(f"Error verifying proof for {username} from {client_addr}: {e}", exc_info=True)
 
-                session["pending_challenge"] = None
-                session["pending_auth_username"] = None
+                session.pending_challenge = None
+                session.pending_auth_username = None
                 server_utils.send_encrypted_response(sock, client_addr, current_channel_sk, auth_res_payload)
 
-            elif not session.get("username"):  # Check for authenticated commands below
+            elif not session.username:  # Check for authenticated commands below
                 logging.warning(f"Unauthenticated command '{command_header}' from {client_addr}. Denying.")
                 server_utils.send_encrypted_response(sock, client_addr, current_channel_sk,
                                         {"type": "AUTH_RESULT", "success": False,
                                          "detail": "Not signed in. Please signin first."})
 
             elif command_header == "GREET":
-                logging.info(f"Processing GREET from '{session['username']}'@{client_addr}")
+                logging.info(f"Processing GREET from '{session.username}'@{client_addr}")
                 server_utils.send_encrypted_response(sock, client_addr, current_channel_sk,
                                         {"type": "GREETING_RESPONSE", "status": "GREETING_OK",
-                                         "detail": f"Hello {session['username']}! Greeting received."})
+                                         "detail": f"Hello {session.username}! Greeting received."})
 
             elif command_header == "USERS":
                 logging.info(
-                    f"Processing USERS request from '{session['username']}'@{client_addr}"
+                    f"Processing USERS request from '{session.username}'@{client_addr}"
                 )
                 online_list = list(active_usernames.keys())
                 server_utils.send_encrypted_response(
@@ -293,11 +295,11 @@ def server(port):
                 )
 
             elif command_header == "SIGNOUT":
-                username = session.get("username")
+                username = session.username
                 if username and active_usernames.get(username) == client_addr:
                     del active_usernames[username]
-                session["username"] = None
-                session["authenticated_at"] = None
+                session.username = None
+                session.authenticated_at = None
                 logging.info(f"User '{username}' signed out from {client_addr}")
                 server_utils.send_encrypted_response(sock, client_addr, current_channel_sk,
                                         {"type": "SIGNOUT_RESULT", "success": True,
@@ -309,7 +311,7 @@ def server(port):
                 to_user = req_payload.get("to_user")
                 content = req_payload.get("content")
                 ts = req_payload.get("timestamp")
-                sender = session["username"]
+                sender = session.username
                 logging.info(f"Processing SECURE_MESSAGE from '{sender}' to '{to_user}' via {client_addr}")
                 status_payload = {"type": "MESSAGE_STATUS"}
                 if not (server_utils.validate_username_format(to_user) and server_utils.validate_message_content(content) and server_utils.validate_timestamp_internal(ts)):
@@ -319,10 +321,10 @@ def server(port):
                     target_addr, target_sk = None, None
                     for addr, s_data in client_sessions.items():  # Find recipient
                         if (
-                            s_data.get("username") == to_user
+                            s_data.username == to_user
                             and active_usernames.get(to_user) == addr
                         ):
-                            target_addr, target_sk = addr, s_data.get("channel_sk")
+                            target_addr, target_sk = addr, s_data.channel_sk
                             break
                     if target_addr and target_sk:
                         server_utils.send_encrypted_response(sock, target_addr, target_sk,
@@ -340,7 +342,7 @@ def server(port):
             elif command_header == "BROADCAST":
                 content = req_payload.get("content")
                 ts = req_payload.get("timestamp")
-                sender = session["username"]
+                sender = session.username
                 logging.info(f"Processing BROADCAST from '{sender}' via {client_addr}")
                 status_payload = {"type": "MESSAGE_STATUS"}
                 if not (server_utils.validate_broadcast_content(content) and server_utils.validate_timestamp_internal(ts)):
@@ -350,10 +352,13 @@ def server(port):
                 else:
                     count = 0
                     for addr, s_data in list(client_sessions.items()):
-                        if addr != client_addr and s_data.get("username") and s_data.get("channel_sk"):
-                            server_utils.send_encrypted_response(sock, addr, s_data["channel_sk"],
-                                                    {"type": "BROADCAST_INCOMING", "from_user": sender,
-                                                     "content": content, "timestamp": ts})
+                        if addr != client_addr and s_data.username and s_data.channel_sk:
+                            server_utils.send_encrypted_response(
+                                sock,
+                                addr,
+                                s_data.channel_sk,
+                                {"type": "BROADCAST_INCOMING", "from_user": sender,
+                                 "content": content, "timestamp": ts})
                             count += 1
                     status_payload.update(
                         {"status": "BROADCAST_SENT", "detail": f"Broadcast sent to {count} other active users."})
@@ -362,14 +367,14 @@ def server(port):
 
             else:
                 logging.warning(
-                    f"Unknown authenticated command '{command_header}' from '{session.get('username', 'UNKNOWN')}'@{client_addr}")
+                    f"Unknown authenticated command '{command_header}' from '{session.username or 'UNKNOWN'}'@{client_addr}")
                 server_utils.send_encrypted_response(sock, client_addr, current_channel_sk,
                                         {"type": "SERVER_ERROR",
                                          "detail": f"Unknown or unsupported command: {command_header}"})
 
         except ConnectionResetError:
             if client_addr in client_sessions:
-                username_left = client_sessions[client_addr].get('username')
+                username_left = client_sessions[client_addr].username
                 logging.info(
                     f"Client {username_left or client_addr} disconnected (ConnectionResetError). Session removed.")
                 if username_left and active_usernames.get(username_left) == client_addr:
@@ -384,8 +389,8 @@ def server(port):
         except Exception as e:
             logging.error(f"Unexpected critical error processing data from {client_addr}: {e}", exc_info=True)
             s_err = client_sessions.get(client_addr)  # Attempt to send encrypted error if session exists
-            if s_err and s_err.get("channel_sk"):
-                server_utils.send_encrypted_response(sock, client_addr, s_err["channel_sk"], {"type": "SERVER_ERROR",
+            if s_err and s_err.channel_sk:
+                server_utils.send_encrypted_response(sock, client_addr, s_err.channel_sk, {"type": "SERVER_ERROR",
                                                                                  "detail": "An unexpected internal server error occurred. Please try again."})
 
 

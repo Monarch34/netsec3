@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import base64
 import logging
 import os
 import time
 import re
+from dataclasses import dataclass
 from collections import defaultdict
 from typing import Tuple, Any, Dict
 
@@ -102,14 +102,15 @@ def relay_raw(sock: Any, header: str, sender_addr: Tuple[str, int], raw_blob: st
         return
     target_addr = None
     for addr, sess in client_sessions.items():
-        if sess.get("username") == target and sess.get("channel_sk"):
+        if sess.username == target and sess.channel_sk:
             target_addr = addr
             break
     if not target_addr:
         logging.info("%s target %s not found", header, target)
         return
     sock.sendto(f"{header}:{raw_blob}".encode("utf-8"), target_addr)
-    sender_user = client_sessions.get(sender_addr, {}).get("username", sender_addr)
+    sender_sess = client_sessions.get(sender_addr)
+    sender_user = sender_sess.username if sender_sess else sender_addr
     logging.info("Relayed %s from %s to %s (len=%d)", header, sender_user, target, len(raw_blob))
 
 
@@ -117,23 +118,41 @@ def relay_raw(sock: Any, header: str, sender_addr: Tuple[str, int], raw_blob: st
 # Session tracking / notifications
 # ---------------------------------------------------------------------------
 
+
+@dataclass
+class Session:
+    channel_sk: bytes
+    username: str | None = None
+    authenticated_at: float | None = None
+    last_seen: float = 0.0
+    pending_challenge: str | None = None
+    pending_auth_username: str | None = None
+
+
 # Client session tracking shared with server module
-client_sessions: Dict[Tuple[str, int], Dict[str, Any]] = {}
+client_sessions: Dict[Tuple[str, int], Session] = {}
 active_usernames: Dict[str, Tuple[str, int]] = {}
 
 
 def notify_user_logout(sock: Any, username: str) -> None:
     """Notify all connected clients that ``username`` signed out."""
     for addr, sess in list(client_sessions.items()):
-        if (
-            sess.get("username")
-            and sess.get("username") != username
-            and sess.get("channel_sk")
-        ):
+        if sess.username and sess.username != username and sess.channel_sk:
             send_encrypted_response(
                 sock,
                 addr,
-                sess["channel_sk"],
+                sess.channel_sk,
                 {"type": "USER_LOGOUT", "user": username},
             )
 
+
+def notify_user_login(sock: Any, username: str) -> None:
+    """Notify all connected clients that ``username`` signed in."""
+    for addr, sess in list(client_sessions.items()):
+        if sess.username and sess.username != username and sess.channel_sk:
+            send_encrypted_response(
+                sock,
+                addr,
+                sess.channel_sk,
+                {"type": "USER_LOGIN", "user": username},
+            )
