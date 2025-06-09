@@ -822,6 +822,11 @@ def handle_signin(
         )
         return
 
+    if channel_sk is None:
+        key_exchange_complete.clear()
+        if not perform_key_exchange(sock, server_address):
+            return
+
     client_username = uname
     auth_challenge_data = None
     auth_successful_event.clear()
@@ -895,9 +900,9 @@ def handle_signin(
 
 
 def handle_logout(sock: socket.socket, server_address: tuple[str, int]) -> None:
-    """Sign out from the server."""
+    """Sign out from the server and drop the secure channel."""
 
-    global is_authenticated, client_username
+    global is_authenticated, client_username, channel_sk
 
     if not is_authenticated:
         console.print("<System> Error: not signed in.", style="error")
@@ -906,6 +911,8 @@ def handle_logout(sock: socket.socket, server_address: tuple[str, int]) -> None:
     send_secure_command(sock, server_address, "SIGNOUT", {"nonce": generate_nonce()})
     is_authenticated = False
     client_username = None
+    channel_sk = None
+    key_exchange_complete.clear()
     console.print("<System> Logged out.", style="system")
 
 
@@ -1030,12 +1037,11 @@ def handle_multi(sock: socket.socket, server_address: tuple[str, int],
             )
             sent_any = True
         if not sent_any:
-            payload = {
-                "content": msg_content,
-                "timestamp": str(time.time()),
-                "nonce": generate_nonce(),
-            }
-            send_secure_command(sock, server_address, "BROADCAST", payload)
+            console.print(
+                "<System> No active session keys with peers. Use 'ns' to establish keys.",
+                style="error",
+            )
+            return
         ts = datetime.now().strftime("%H:%M:%S")
         console.print(f"[{ts}] <You> multi: {msg_content}", style="client")
     else:

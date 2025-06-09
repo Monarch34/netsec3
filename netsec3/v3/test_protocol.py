@@ -286,6 +286,33 @@ class ChatProtocolTest(unittest.TestCase):
         resp2 = get_users(self.sock1, self.sk1)
         self.assertNotIn("bob", resp2.get("users"))
 
+    def test_logged_out_user_cannot_relay(self):
+        sign_up_and_sign_in(self.sock1, self.sk1, "alice", "pw1aaaa")
+        sign_up_and_sign_in(self.sock2, self.sk2, "bob", "pw2bbbb")
+
+        sign_out(self.sock1, self.sk1)
+        # flush logout notification to sock2
+        notice = recv_payload(self.sock2, self.sk2)
+        self.assertEqual(notice.get("type"), "USER_LOGOUT")
+
+        self.sock1.settimeout(0.5)
+        self.sock2.settimeout(0.5)
+        send_command(
+            self.sock1,
+            self.sk1,
+            "SECURE_MESSAGE",
+            {
+                "to_user": "bob",
+                "content": "hi",
+                "timestamp": str(time.time()),
+                "nonce": str(uuid.uuid4()),
+            },
+        )
+        with self.assertRaises(socket.timeout):
+            self.sock1.recvfrom(4096)
+        with self.assertRaises(socket.timeout):
+            self.sock2.recvfrom(4096)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -30,6 +30,9 @@ python -m netsec3.v3.chat_server <port>
 
 Choose any free port between `1025` and `65535`.
 
+Server activity is recorded in `server.log` located in the
+same directory as the server script.
+
 ### Run the client
 
 ```bash
