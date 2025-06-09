@@ -1021,7 +1021,11 @@ def handle_broadcast(sock: socket.socket, server_address: tuple[str, int],
             )
             sent_any = True
         if not sent_any:
-            payload = {"content": msg_content, "timestamp": str(time.time())}
+            payload = {
+                "content": msg_content,
+                "timestamp": str(time.time()),
+                "nonce": generate_nonce(),
+            }
             send_secure_command(sock, server_address, "BROADCAST", payload)
         ts = datetime.now().strftime("%H:%M:%S")
         console.print(f"[{ts}] <You> broadcast: {msg_content}", style="client")
