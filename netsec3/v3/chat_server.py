@@ -25,12 +25,19 @@ except ImportError:
         print("Error: crypto_utils.py not found.")
         sys.exit(1)
 
-# Configure logging: INFO level to file only
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - SERVER - %(levelname)s - %(message)s",
-    handlers=[logging.FileHandler("server.log", mode="a")],
-)
+# Configure logging: DEBUG level to file, INFO to console
+logger = logging.getLogger()
+logger.handlers.clear()
+logger.setLevel(logging.DEBUG)
+_fmt = "%(asctime)s - SERVER - %(levelname)s - %(message)s"
+file_handler = logging.FileHandler("server.log", mode="a")
+file_handler.setLevel(logging.DEBUG)
+file_handler.setFormatter(logging.Formatter(_fmt))
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(logging.Formatter(_fmt))
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
 
 CREDENTIALS_FILE = config.CREDENTIALS_FILE
 RELAY_HEADERS = config.RELAY_HEADERS
@@ -115,7 +122,7 @@ def server(port, stop_event=None):
         try:
             message_str = data.decode('utf-8')
             client_ip = client_addr[0]
-            logging.info(f"REQ from {client_addr}: {message_str}")
+            logging.debug(f"REQ from {client_addr}: {message_str}")
 
             if server_utils.is_rate_limited(client_ip):
                 continue  # Rate limit log is already a WARNING
@@ -155,7 +162,12 @@ def server(port, stop_event=None):
 
             if command_header in RELAY_HEADERS:
                 server_utils.relay_raw(
-                    sock, command_header, client_addr, payload_b64_str, client_sessions
+                    sock,
+                    command_header,
+                    client_addr,
+                    payload_b64_str,
+                    client_sessions,
+                    active_usernames,
                 )
                 continue
 

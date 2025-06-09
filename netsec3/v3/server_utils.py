@@ -118,12 +118,17 @@ def validate_timestamp_internal(timestamp_str: str) -> bool:
     return abs(time.time() - ts) <= config.TIMESTAMP_WINDOW_SECONDS
 
 
-def send_encrypted_response(sock: Any, client_address: Tuple[str, int], channel_sk: bytes, response_payload_dict: Dict[str, Any]) -> None:
+def send_encrypted_response(
+    sock: Any,
+    client_address: Tuple[str, int],
+    channel_sk: bytes,
+    response_payload_dict: Dict[str, Any],
+) -> None:
     """Utility to encrypt and send a JSON payload back to the client."""
     resp_bytes = crypto_utils.serialize_payload(response_payload_dict)
     enc_blob = crypto_utils.encrypt_aes_gcm(channel_sk, resp_bytes)
     sock.sendto(enc_blob.encode("utf-8"), client_address)
-    logging.info("RESP to %s: %s", client_address, enc_blob)
+    logging.debug("RESP to %s: %s", client_address, enc_blob)
 
 
 def relay_raw(
@@ -132,22 +137,20 @@ def relay_raw(
     sender_addr: Tuple[str, int],
     raw_blob: str,
     client_sessions: Dict[Tuple[str, int], Dict[str, Any]],
+    active_usernames: Dict[str, Tuple[str, int]],
 ) -> None:
     """Relay an encrypted blob between two clients."""
     target, _, rest = raw_blob.partition(":")
     if not rest:
         logging.warning("Malformed %s from %s", header, sender_addr)
         return
-    target_addr = None
-    for addr, sess in client_sessions.items():
-        if sess.get("username") == target and sess.get("channel_sk"):
-            target_addr = addr
-            break
-    if not target_addr:
+    target_addr = active_usernames.get(target)
+    target_sess = client_sessions.get(target_addr) if target_addr else None
+    if not (target_addr and target_sess and target_sess.get("channel_sk")):
         logging.info("%s target %s not found", header, target)
         return
     sock.sendto(f"{header}:{raw_blob}".encode("utf-8"), target_addr)
-    logging.info("Forwarded %s to %s: %s", header, target, raw_blob)
+    logging.debug("Forwarded %s to %s: %s", header, target, raw_blob)
     sender_user = client_sessions.get(sender_addr, {}).get("username", sender_addr)
     logging.info(
         "Relayed %s from %s to %s (len=%d)", header, sender_user, target, len(raw_blob)
