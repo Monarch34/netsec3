@@ -811,7 +811,7 @@ def handle_signin(
 ) -> None:
     """Process the signin command using challenge-response."""
 
-    global client_username, auth_challenge_data
+    global client_username, auth_challenge_data, channel_sk
 
     uname = prompt_text(
         "Enter username for signin: ", validator=get_username_validator()
