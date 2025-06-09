@@ -89,6 +89,9 @@ def validate_internal_nonce(nonce_value: str) -> bool:
     if ts and now - ts < config.INTERNAL_NONCE_EXPIRY_SECONDS:
         return False
     used_internal_nonces[nonce_value] = now
+    for n, t in list(used_internal_nonces.items()):
+        if now - t > config.INTERNAL_NONCE_EXPIRY_SECONDS:
+            del used_internal_nonces[n]
     return True
 
 
@@ -120,6 +123,7 @@ def send_encrypted_response(sock: Any, client_address: Tuple[str, int], channel_
     resp_bytes = crypto_utils.serialize_payload(response_payload_dict)
     enc_blob = crypto_utils.encrypt_aes_gcm(channel_sk, resp_bytes)
     sock.sendto(enc_blob.encode("utf-8"), client_address)
+    logging.info("RESP to %s: %s", client_address, enc_blob)
 
 
 def relay_raw(
@@ -143,6 +147,7 @@ def relay_raw(
         logging.info("%s target %s not found", header, target)
         return
     sock.sendto(f"{header}:{raw_blob}".encode("utf-8"), target_addr)
+    logging.info("Forwarded %s to %s: %s", header, target, raw_blob)
     sender_user = client_sessions.get(sender_addr, {}).get("username", sender_addr)
     logging.info(
         "Relayed %s from %s to %s (len=%d)", header, sender_user, target, len(raw_blob)

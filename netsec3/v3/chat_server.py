@@ -1,4 +1,4 @@
-# chat_server_secure.py
+# chat_server.py
 import socket
 import sys
 import logging
@@ -29,6 +29,10 @@ except ImportError:
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - SERVER - %(levelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler("server.log", mode="a"),
+        logging.StreamHandler(),
+    ],
 )
 
 CREDENTIALS_FILE = config.CREDENTIALS_FILE
@@ -114,7 +118,7 @@ def server(port, stop_event=None):
         try:
             message_str = data.decode('utf-8')
             client_ip = client_addr[0]
-            logging.debug(f"Raw from {client_addr}: '{message_str[:100]}...'")  # DEBUG for raw messages
+            logging.info(f"REQ from {client_addr}: {message_str}")
 
             if server_utils.is_rate_limited(client_ip):
                 continue  # Rate limit log is already a WARNING
@@ -168,11 +172,9 @@ def server(port, stop_event=None):
                 logging.info(
                     "Received NS_REQ from %s for peer %s", session.get("username"), peer
                 )
-                target_addr, target_sk = None, None
-                for addr, s_data in client_sessions.items():
-                    if s_data.get("username") == peer and s_data.get("channel_sk"):
-                        target_addr, target_sk = addr, s_data["channel_sk"]
-                        break
+                target_addr = active_usernames.get(peer)
+                target_session = client_sessions.get(target_addr) if target_addr else None
+                target_sk = target_session.get("channel_sk") if target_session else None
                 if not (target_addr and target_sk):
                     logging.info("NS_REQ for offline user %s from %s", peer, client_addr)
                     sock.sendto(f"NS_FAIL:{peer}:offline".encode("utf-8"), client_addr)
@@ -357,14 +359,9 @@ def server(port, stop_event=None):
                     status_payload.update({"status": "MESSAGE_FAIL", "detail": "Invalid message format or timestamp."})
                     logging.warning(f"Invalid SECURE_MESSAGE format from '{sender}': to={to_user}, ts={ts}")
                 else:
-                    target_addr, target_sk = None, None
-                    for addr, s_data in client_sessions.items():  # Find recipient
-                        if (
-                            s_data.get("username") == to_user
-                            and active_usernames.get(to_user) == addr
-                        ):
-                            target_addr, target_sk = addr, s_data.get("channel_sk")
-                            break
+                    target_addr = active_usernames.get(to_user)
+                    target_session = client_sessions.get(target_addr) if target_addr else None
+                    target_sk = target_session.get("channel_sk") if target_session else None
                     if target_addr and target_sk:
                         server_utils.send_encrypted_response(sock, target_addr, target_sk,
                                                 {"type": "SECURE_MESSAGE_INCOMING", "from_user": sender,
@@ -443,7 +440,7 @@ def server(port, stop_event=None):
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        print("Usage: python chat_server_secure.py <port>")
+        print("Usage: python chat_server.py <port>")
         sys.exit(1)
     try:
         server_port = int(sys.argv[1])
