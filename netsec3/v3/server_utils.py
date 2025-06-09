@@ -28,6 +28,9 @@ request_tracker: dict[str, list[float]] = defaultdict(list)
 # Cache of used internal nonces
 used_internal_nonces: dict[str, float] = {}
 
+# Cache of recently seen message nonces to prevent replay
+used_message_nonces: dict[str, float] = {}
+
 
 def reset_caches() -> None:
     """Reset rate limiting and nonce caches.
@@ -37,6 +40,7 @@ def reset_caches() -> None:
     """
     request_tracker.clear()
     used_internal_nonces.clear()
+    used_message_nonces.clear()
 
 
 def validate_username_format(username: str) -> bool:
@@ -85,6 +89,20 @@ def validate_internal_nonce(nonce_value: str) -> bool:
     if ts and now - ts < config.INTERNAL_NONCE_EXPIRY_SECONDS:
         return False
     used_internal_nonces[nonce_value] = now
+    return True
+
+
+def validate_message_nonce(nonce_value: str) -> bool:
+    """Return True if the message nonce is unused within the timestamp window."""
+    now = time.time()
+    ts = used_message_nonces.get(nonce_value)
+    if ts and now - ts < config.TIMESTAMP_WINDOW_SECONDS:
+        return False
+    used_message_nonces[nonce_value] = now
+    # Prune old nonces to avoid unbounded growth
+    for n, t in list(used_message_nonces.items()):
+        if now - t > config.TIMESTAMP_WINDOW_SECONDS:
+            del used_message_nonces[n]
     return True
 
 

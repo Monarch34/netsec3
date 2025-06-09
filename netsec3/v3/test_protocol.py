@@ -145,14 +145,33 @@ class ChatProtocolTest(unittest.TestCase):
         self.assertTrue(resp.get("success"))
 
         # Direct message from user1 to user2
-        send_command(self.sock1, self.sk1, "SECURE_MESSAGE", {"to_user": "user2", "content": "hi", "timestamp": str(time.time())})
+        send_command(
+            self.sock1,
+            self.sk1,
+            "SECURE_MESSAGE",
+            {
+                "to_user": "user2",
+                "content": "hi",
+                "timestamp": str(time.time()),
+                "nonce": str(uuid.uuid4()),
+            },
+        )
         incoming = recv_payload(self.sock2, self.sk2)
         self.assertEqual(incoming.get("type"), "SECURE_MESSAGE_INCOMING")
         ack = recv_payload(self.sock1, self.sk1)
         self.assertEqual(ack.get("status"), "MESSAGE_SENT")
 
         # Broadcast from user2
-        send_command(self.sock2, self.sk2, "BROADCAST", {"content": "hello all", "timestamp": str(time.time())})
+        send_command(
+            self.sock2,
+            self.sk2,
+            "BROADCAST",
+            {
+                "content": "hello all",
+                "timestamp": str(time.time()),
+                "nonce": str(uuid.uuid4()),
+            },
+        )
         incoming_b = recv_payload(self.sock1, self.sk1)
         self.assertEqual(incoming_b.get("type"), "BROADCAST_INCOMING")
         ack_b = recv_payload(self.sock2, self.sk2)
@@ -167,7 +186,12 @@ class ChatProtocolTest(unittest.TestCase):
             self.sock1,
             self.sk1,
             "SECURE_MESSAGE",
-            {"to_user": "user2", "content": long_msg, "timestamp": str(time.time())},
+            {
+                "to_user": "user2",
+                "content": long_msg,
+                "timestamp": str(time.time()),
+                "nonce": str(uuid.uuid4()),
+            },
         )
         ack = recv_payload(self.sock1, self.sk1)
         self.assertEqual(ack.get("status"), "MESSAGE_FAIL")
@@ -181,7 +205,7 @@ class ChatProtocolTest(unittest.TestCase):
             self.sock1,
             self.sk1,
             "BROADCAST",
-            {"content": long_msg, "timestamp": str(time.time())},
+            {"content": long_msg, "timestamp": str(time.time()), "nonce": str(uuid.uuid4())},
         )
         ack = recv_payload(self.sock1, self.sk1)
         self.assertEqual(ack.get("status"), "BROADCAST_FAIL")
@@ -204,10 +228,50 @@ class ChatProtocolTest(unittest.TestCase):
             self.sock1,
             self.sk1,
             "SECURE_MESSAGE",
-            {"to_user": "bob", "content": "hi", "timestamp": str(time.time())},
+            {
+                "to_user": "bob",
+                "content": "hi",
+                "timestamp": str(time.time()),
+                "nonce": str(uuid.uuid4()),
+            },
         )
         ack = recv_payload(self.sock1, self.sk1)
         self.assertEqual(ack.get("status"), "MESSAGE_FAIL")
+
+    def test_duplicate_secure_message(self):
+        sign_up_and_sign_in(self.sock1, self.sk1, "alice", "password1")
+        sign_up_and_sign_in(self.sock2, self.sk2, "bob", "password2")
+
+        nonce = str(uuid.uuid4())
+        ts = str(time.time())
+        send_command(
+            self.sock1,
+            self.sk1,
+            "SECURE_MESSAGE",
+            {
+                "to_user": "bob",
+                "content": "hi",
+                "timestamp": ts,
+                "nonce": nonce,
+            },
+        )
+        recv_payload(self.sock2, self.sk2)
+        ack1 = recv_payload(self.sock1, self.sk1)
+        self.assertEqual(ack1.get("status"), "MESSAGE_SENT")
+
+        send_command(
+            self.sock1,
+            self.sk1,
+            "SECURE_MESSAGE",
+            {
+                "to_user": "bob",
+                "content": "hi",
+                "timestamp": ts,
+                "nonce": nonce,
+            },
+        )
+        ack2 = recv_payload(self.sock1, self.sk1)
+        self.assertEqual(ack2.get("status"), "MESSAGE_FAIL")
 
     def test_users_command(self):
         sign_up_and_sign_in(self.sock1, self.sk1, "alice", "pw12345")
