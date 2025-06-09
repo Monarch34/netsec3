@@ -118,6 +118,7 @@ def setup_environment(cfg: ClientConfig) -> None:
             "logout",
             "users",
             "message",
+            "multi",
             "broadcast",
             "greet",
             "help",
@@ -137,6 +138,7 @@ def print_command_list() -> None:
         "logout      Logout from the server\n"
         "users       List online users\n"
         "message     Send a private message: message <target> <content>\n"
+        "multi       Send an encrypted message to all peers\n"
         "broadcast   Send a message to all users: broadcast <content>\n"
         "greet       Send a friendly greeting\n"
         "logs        Show chat history\n"
@@ -979,9 +981,9 @@ def handle_message(sock: socket.socket, server_address: tuple[str, int],
         )
 
 
-def handle_broadcast(sock: socket.socket, server_address: tuple[str, int],
-                     action_input: str) -> None:
-    """Send a broadcast message to all users."""
+def handle_multi(sock: socket.socket, server_address: tuple[str, int],
+                 action_input: str) -> None:
+    """Send an encrypted message to all peers individually."""
 
     if not is_authenticated:
         console.print(
@@ -1027,6 +1029,36 @@ def handle_broadcast(sock: socket.socket, server_address: tuple[str, int],
                 "nonce": generate_nonce(),
             }
             send_secure_command(sock, server_address, "BROADCAST", payload)
+        ts = datetime.now().strftime("%H:%M:%S")
+        console.print(f"[{ts}] <You> multi: {msg_content}", style="client")
+    else:
+        console.print(
+            "<System> Error: usage multi <content>. "
+            "Type `help` for usage.",
+            style="error",
+        )
+
+
+def handle_broadcast(sock: socket.socket, server_address: tuple[str, int],
+                     action_input: str) -> None:
+    """Send a broadcast message to all users via the server."""
+
+    if not is_authenticated:
+        console.print(
+            "<System> Error: not signed in. Type `help` for usage.",
+            style="error",
+        )
+        return
+
+    parts = action_input.split(" ", 1)
+    if len(parts) > 1 and parts[1].strip():
+        msg_content = parts[1]
+        payload = {
+            "content": msg_content,
+            "timestamp": str(time.time()),
+            "nonce": generate_nonce(),
+        }
+        send_secure_command(sock, server_address, "BROADCAST", payload)
         ts = datetime.now().strftime("%H:%M:%S")
         console.print(f"[{ts}] <You> broadcast: {msg_content}", style="client")
     else:
@@ -1112,6 +1144,8 @@ def command_loop(sock: socket.socket, server_address: tuple[str, int]) -> None:
                     handle_users(sock, server_address)
                 elif action_cmd == "message":
                     handle_message(sock, server_address, action_input)
+                elif action_cmd == "multi":
+                    handle_multi(sock, server_address, action_input)
                 elif action_cmd == "broadcast":
                     handle_broadcast(sock, server_address, action_input)
                 elif action_cmd == "greet":
