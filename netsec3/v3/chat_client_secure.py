@@ -828,10 +828,10 @@ def handle_signin(
         )
         return
 
-    # Always establish a fresh key before signin to avoid using a stale channel key
-    key_exchange_complete.clear()
-    if not perform_key_exchange(sock, server_address):
-        return
+    if channel_sk is None:
+        key_exchange_complete.clear()
+        if not perform_key_exchange(sock, server_address):
+            return
 
     client_username = uname
     auth_challenge_data = None
