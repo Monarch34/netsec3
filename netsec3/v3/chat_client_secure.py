@@ -995,6 +995,12 @@ def handle_multi(sock: socket.socket, server_address: tuple[str, int],
     parts = action_input.split(" ", 1)
     if len(parts) > 1 and parts[1].strip():
         msg_content = parts[1]
+        refresh_online_users(sock, server_address)
+        # Remove any session keys for peers who are no longer online
+        for peer in list(session_keys.keys()):
+            if online_users and peer not in online_users:
+                session_keys.pop(peer, None)
+                handshake_events.pop(peer, None)
         sent_any = False
         for peer, entry in list(session_keys.items()):
             if (
@@ -1007,6 +1013,7 @@ def handle_multi(sock: socket.socket, server_address: tuple[str, int],
                     evt.wait(timeout=HANDSHAKE_TIMEOUT)
             entry = session_keys.get(peer)
             if not entry or entry.get("state") != "complete":
+                session_keys.pop(peer, None)
                 continue
             nonce = generate_nonce_bytes()
             ct = crypto_utils.encrypt_aes_gcm_detached(
