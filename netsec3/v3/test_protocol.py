@@ -64,7 +64,28 @@ def sign_out(sock, sk):
 
 def get_users(sock, sk):
     send_command(sock, sk, "USERS", {"nonce": str(uuid.uuid4())})
-    return recv_payload(sock, sk)
+    payload = recv_payload(sock, sk)
+    # Skip asynchronous notifications
+    if payload.get("type") in {"USER_LOGOUT", "USER_LOGIN"}:
+        payload = recv_payload(sock, sk)
+    return payload
+
+
+def flush_notify(sock, sk):
+    """Remove a pending USER_LOGIN/LOGOUT message if present."""
+    sock.settimeout(0.2)
+    try:
+        data, _ = sock.recvfrom(4096)
+    except socket.timeout:
+        sock.settimeout(2)
+        return
+    sock.settimeout(2)
+    payload = crypto_utils.deserialize_payload(
+        crypto_utils.decrypt_aes_gcm(sk, data.decode())
+    )
+    if payload.get("type") not in {"USER_LOGIN", "USER_LOGOUT"}:
+        # put back? just ignore for tests
+        pass
 
 
 def sign_up_and_sign_in(sock, sk, username, password):
@@ -140,6 +161,7 @@ class ChatProtocolTest(unittest.TestCase):
         send_command(self.sock2, self.sk2, "AUTH_RESPONSE", {"challenge_response": proof2_b64, "client_nonce": str(uuid.uuid4())})
         resp = recv_payload(self.sock2, self.sk2)
         self.assertTrue(resp.get("success"))
+        flush_notify(self.sock1, self.sk1)
 
         # Direct message from user1 to user2
         send_command(self.sock1, self.sk1, "SECURE_MESSAGE", {"to_user": "user2", "content": "hi", "timestamp": str(time.time())})
@@ -158,6 +180,7 @@ class ChatProtocolTest(unittest.TestCase):
     def test_oversized_message(self):
         sign_up_and_sign_in(self.sock1, self.sk1, "user1", "password1")
         sign_up_and_sign_in(self.sock2, self.sk2, "user2", "password2")
+        flush_notify(self.sock1, self.sk1)
 
         long_msg = "x" * 513
         send_command(
@@ -172,6 +195,7 @@ class ChatProtocolTest(unittest.TestCase):
     def test_oversized_broadcast(self):
         sign_up_and_sign_in(self.sock1, self.sk1, "user1", "password1")
         sign_up_and_sign_in(self.sock2, self.sk2, "user2", "password2")
+        flush_notify(self.sock1, self.sk1)
 
         long_msg = "y" * 513
         send_command(
@@ -209,6 +233,7 @@ class ChatProtocolTest(unittest.TestCase):
     def test_users_command(self):
         sign_up_and_sign_in(self.sock1, self.sk1, "alice", "pw12345")
         sign_up_and_sign_in(self.sock2, self.sk2, "bob", "pw23456")
+        flush_notify(self.sock1, self.sk1)
         resp = get_users(self.sock1, self.sk1)
         self.assertEqual(resp.get("type"), "USERS_LIST")
         users = resp.get("users")

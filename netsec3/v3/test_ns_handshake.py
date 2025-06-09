@@ -59,6 +59,24 @@ def sign_up_and_in(sock, sk, username, password):
     assert resp.get("success")
 
 
+def flush_login(sock, sk):
+    sock.settimeout(0.2)
+    try:
+        data, _ = sock.recvfrom(4096)
+    except socket.timeout:
+        sock.settimeout(2)
+        return
+    sock.settimeout(2)
+    try:
+        payload = crypto_utils.deserialize_payload(
+            crypto_utils.decrypt_aes_gcm(sk, data.decode())
+        )
+        if payload.get("type") not in {"USER_LOGIN", "USER_LOGOUT"}:
+            pass
+    except Exception:
+        pass
+
+
 def run_server():
     script = os.path.join(os.path.dirname(__file__), "chat_server.py")
     return subprocess.Popen([sys.executable, script, str(SERVER_PORT)])
@@ -77,6 +95,7 @@ def test_needham_schroeder_chat(tmp_path):
 
         sign_up_and_in(sock1, sk1, "alice", "password1")
         sign_up_and_in(sock2, sk2, "bob", "password2")
+        flush_login(sock1, sk1)
 
         # NS_REQ from alice for bob
         nonce1 = base64.b64encode(os.urandom(NONCE_SIZE)).decode()
