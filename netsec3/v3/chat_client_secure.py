@@ -828,10 +828,10 @@ def handle_signin(
         )
         return
 
-    if channel_sk is None:
-        key_exchange_complete.clear()
-        if not perform_key_exchange(sock, server_address):
-            return
+    # Always establish a fresh key before signin to avoid using a stale channel key
+    key_exchange_complete.clear()
+    if not perform_key_exchange(sock, server_address):
+        return
 
     client_username = uname
     auth_challenge_data = None
@@ -886,6 +886,7 @@ def handle_signin(
                     style="error",
                 )
                 client_username = None
+                channel_sk = None
         except Exception as exc:
             console.print(f"<System> Error: {exc}", style="error")
             logging.error(
@@ -894,6 +895,7 @@ def handle_signin(
                 exc_info=True,
             )
             client_username = None
+            channel_sk = None
     elif auth_successful_event.is_set():
         client_username = None
         return
@@ -903,6 +905,7 @@ def handle_signin(
             style="error",
         )
         client_username = None
+        channel_sk = None
 
 
 def handle_logout(sock: socket.socket, server_address: tuple[str, int]) -> None:
