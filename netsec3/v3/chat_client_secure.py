@@ -928,6 +928,11 @@ def handle_logout(sock: socket.socket, server_address: tuple[str, int]) -> None:
         time.sleep(0.1)
     if not logout_ack_event.is_set():
         console.print("<System> Logout timed out.", style="error")
+    else:
+        # After a successful logout the channel key is dropped. Establish a fresh
+        # key so a subsequent signin can proceed without warnings.
+        key_exchange_complete.clear()
+        perform_key_exchange(sock, server_address)
 
 
 def handle_users(sock: socket.socket, server_address: tuple[str, int]) -> None:
