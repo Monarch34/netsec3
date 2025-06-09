@@ -1,4 +1,4 @@
-# chat_server_secure.py
+"""Secure chat server handling ECDH key exchange and encrypted chat."""
 import socket
 import sys
 import logging
@@ -25,11 +25,19 @@ except ImportError:
         print("Error: crypto_utils.py not found.")
         sys.exit(1)
 
-# Configure logging: INFO level for server operations
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - SERVER - %(levelname)s - %(message)s",
-)
+# Configure logging: DEBUG level to file, INFO to console
+logger = logging.getLogger()
+logger.handlers.clear()
+logger.setLevel(logging.DEBUG)
+_fmt = "%(asctime)s - SERVER - %(levelname)s - %(message)s"
+file_handler = logging.FileHandler("server.log", mode="a")
+file_handler.setLevel(logging.DEBUG)
+file_handler.setFormatter(logging.Formatter(_fmt))
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(logging.Formatter(_fmt))
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
 
 CREDENTIALS_FILE = config.CREDENTIALS_FILE
 RELAY_HEADERS = config.RELAY_HEADERS
@@ -114,7 +122,7 @@ def server(port, stop_event=None):
         try:
             message_str = data.decode('utf-8')
             client_ip = client_addr[0]
-            logging.debug(f"Raw from {client_addr}: '{message_str[:100]}...'")  # DEBUG for raw messages
+            logging.debug(f"REQ from {client_addr}: {message_str}")
 
             if server_utils.is_rate_limited(client_ip):
                 continue  # Rate limit log is already a WARNING
@@ -154,7 +162,12 @@ def server(port, stop_event=None):
 
             if command_header in RELAY_HEADERS:
                 server_utils.relay_raw(
-                    sock, command_header, client_addr, payload_b64_str, client_sessions
+                    sock,
+                    command_header,
+                    client_addr,
+                    payload_b64_str,
+                    client_sessions,
+                    active_usernames,
                 )
                 continue
 
@@ -168,11 +181,9 @@ def server(port, stop_event=None):
                 logging.info(
                     "Received NS_REQ from %s for peer %s", session.get("username"), peer
                 )
-                target_addr, target_sk = None, None
-                for addr, s_data in client_sessions.items():
-                    if s_data.get("username") == peer and s_data.get("channel_sk"):
-                        target_addr, target_sk = addr, s_data["channel_sk"]
-                        break
+                target_addr = active_usernames.get(peer)
+                target_session = client_sessions.get(target_addr) if target_addr else None
+                target_sk = target_session.get("channel_sk") if target_session else None
                 if not (target_addr and target_sk):
                     logging.info("NS_REQ for offline user %s from %s", peer, client_addr)
                     sock.sendto(f"NS_FAIL:{peer}:offline".encode("utf-8"), client_addr)
@@ -338,6 +349,8 @@ def server(port, stop_event=None):
                                          "detail": "Signed out."})
                 if username:
                     server_utils.notify_user_logout(sock, username, client_sessions)
+                # Remove the session key after logout so the client must re-handshake
+                client_sessions.pop(client_addr, None)
 
             elif command_header == "SECURE_MESSAGE":
                 to_user = req_payload.get("to_user")
@@ -357,14 +370,9 @@ def server(port, stop_event=None):
                     status_payload.update({"status": "MESSAGE_FAIL", "detail": "Invalid message format or timestamp."})
                     logging.warning(f"Invalid SECURE_MESSAGE format from '{sender}': to={to_user}, ts={ts}")
                 else:
-                    target_addr, target_sk = None, None
-                    for addr, s_data in client_sessions.items():  # Find recipient
-                        if (
-                            s_data.get("username") == to_user
-                            and active_usernames.get(to_user) == addr
-                        ):
-                            target_addr, target_sk = addr, s_data.get("channel_sk")
-                            break
+                    target_addr = active_usernames.get(to_user)
+                    target_session = client_sessions.get(target_addr) if target_addr else None
+                    target_sk = target_session.get("channel_sk") if target_session else None
                     if target_addr and target_sk:
                         server_utils.send_encrypted_response(sock, target_addr, target_sk,
                                                 {"type": "SECURE_MESSAGE_INCOMING", "from_user": sender,
@@ -443,7 +451,7 @@ def server(port, stop_event=None):
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        print("Usage: python chat_server_secure.py <port>")
+        print("Usage: python -m netsec3.v3.chat_server <port>")
         sys.exit(1)
     try:
         server_port = int(sys.argv[1])
