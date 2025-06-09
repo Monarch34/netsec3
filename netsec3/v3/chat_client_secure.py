@@ -605,8 +605,7 @@ def handle_encrypted_payload(payload: dict) -> None:
         if payload.get("success"):
             is_authenticated = False
             client_username = None
-            channel_sk = None
-            key_exchange_complete.clear()
+            # Keep the secure channel open so a future signin can reuse it
             console.print("<Server> Signed out successfully.", style="server")
         else:
             console.print(f"<Server> Signout failed: {msg_detail}", style="error")
@@ -909,7 +908,7 @@ def handle_signin(
 
 
 def handle_logout(sock: socket.socket, server_address: tuple[str, int]) -> None:
-    """Sign out from the server and drop the secure channel."""
+    """Sign out from the server while keeping the secure channel open."""
 
     global is_authenticated, client_username, channel_sk
 
@@ -929,10 +928,8 @@ def handle_logout(sock: socket.socket, server_address: tuple[str, int]) -> None:
     if not logout_ack_event.is_set():
         console.print("<System> Logout timed out.", style="error")
     else:
-        # After a successful logout the channel key is dropped. Establish a fresh
-        # key so a subsequent signin can proceed without warnings.
-        key_exchange_complete.clear()
-        perform_key_exchange(sock, server_address)
+        # Leave the channel key intact so the connection remains usable
+        pass
 
 
 def handle_users(sock: socket.socket, server_address: tuple[str, int]) -> None:
