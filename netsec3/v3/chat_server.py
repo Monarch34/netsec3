@@ -343,10 +343,17 @@ def server(port, stop_event=None):
                 to_user = req_payload.get("to_user")
                 content = req_payload.get("content")
                 ts = req_payload.get("timestamp")
+                msg_nonce = req_payload.get("nonce")
                 sender = session["username"]
                 logging.info(f"Processing SECURE_MESSAGE from '{sender}' to '{to_user}' via {client_addr}")
                 status_payload = {"type": "MESSAGE_STATUS"}
-                if not (server_utils.validate_username_format(to_user) and server_utils.validate_message_content(content) and server_utils.validate_timestamp_internal(ts)):
+                if not (
+                    server_utils.validate_username_format(to_user)
+                    and server_utils.validate_message_content(content)
+                    and server_utils.validate_timestamp_internal(ts)
+                    and isinstance(msg_nonce, str)
+                    and server_utils.validate_message_nonce(msg_nonce)
+                ):
                     status_payload.update({"status": "MESSAGE_FAIL", "detail": "Invalid message format or timestamp."})
                     logging.warning(f"Invalid SECURE_MESSAGE format from '{sender}': to={to_user}, ts={ts}")
                 else:
@@ -374,10 +381,16 @@ def server(port, stop_event=None):
             elif command_header == "BROADCAST":
                 content = req_payload.get("content")
                 ts = req_payload.get("timestamp")
+                msg_nonce = req_payload.get("nonce")
                 sender = session["username"]
                 logging.info(f"Processing BROADCAST from '{sender}' via {client_addr}")
                 status_payload = {"type": "MESSAGE_STATUS"}
-                if not (server_utils.validate_broadcast_content(content) and server_utils.validate_timestamp_internal(ts)):
+                if not (
+                    server_utils.validate_broadcast_content(content)
+                    and server_utils.validate_timestamp_internal(ts)
+                    and isinstance(msg_nonce, str)
+                    and server_utils.validate_message_nonce(msg_nonce)
+                ):
                     status_payload.update(
                         {"status": "BROADCAST_FAIL", "detail": "Invalid broadcast format or timestamp."})
                     logging.warning(f"Invalid BROADCAST format from '{sender}': ts={ts}")
