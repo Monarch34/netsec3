@@ -1,18 +1,20 @@
 import sys
 import os
 import unittest
-import subprocess
+import threading
 import socket
 import time
 import uuid
 import base64
 try:
     from . import crypto_utils
+    from .chat_server import ChatServer
 except ImportError:
     import os
     import sys
     sys.path.insert(0, os.path.dirname(__file__))
     import crypto_utils
+    from chat_server import ChatServer  # type: ignore
 
 
 SERVER_PORT = 15000
@@ -92,12 +94,9 @@ def sign_up_and_sign_in(sock, sk, username, password):
 
 class ChatProtocolTest(unittest.TestCase):
     def setUp(self):
-        server_script = os.path.join(os.path.dirname(__file__), "chat_server.py")
-        self.server = subprocess.Popen([
-            sys.executable,
-            server_script,
-            str(SERVER_PORT),
-        ])
+        self.server = ChatServer(SERVER_PORT)
+        self.thread = threading.Thread(target=self.server.run, daemon=True)
+        self.thread.start()
         time.sleep(1.0)
         self.sock1 = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock2 = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -109,8 +108,8 @@ class ChatProtocolTest(unittest.TestCase):
     def tearDown(self):
         self.sock1.close()
         self.sock2.close()
-        self.server.terminate()
-        self.server.wait(timeout=5)
+        self.server.stop()
+        self.thread.join(timeout=5)
         if os.path.exists("user_credentials_ecdh_cr.json"):
             os.remove("user_credentials_ecdh_cr.json")
 
