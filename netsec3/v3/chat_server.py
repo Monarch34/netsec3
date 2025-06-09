@@ -451,7 +451,7 @@ def server(port, stop_event=None):
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        print("Usage: python chat_server.py <port>")
+        print("Usage: python -m netsec3.v3.chat_server <port>")
         sys.exit(1)
     try:
         server_port = int(sys.argv[1])
