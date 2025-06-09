@@ -25,14 +25,11 @@ except ImportError:
         print("Error: crypto_utils.py not found.")
         sys.exit(1)
 
-# Configure logging: INFO level for server operations
+# Configure logging: INFO level to file only
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - SERVER - %(levelname)s - %(message)s",
-    handlers=[
-        logging.FileHandler("server.log", mode="a"),
-        logging.StreamHandler(),
-    ],
+    handlers=[logging.FileHandler("server.log", mode="a")],
 )
 
 CREDENTIALS_FILE = config.CREDENTIALS_FILE
