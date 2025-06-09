@@ -349,6 +349,8 @@ def server(port, stop_event=None):
                                          "detail": "Signed out."})
                 if username:
                     server_utils.notify_user_logout(sock, username, client_sessions)
+                # Remove the session key after logout so the client must re-handshake
+                client_sessions.pop(client_addr, None)
 
             elif command_header == "SECURE_MESSAGE":
                 to_user = req_payload.get("to_user")
