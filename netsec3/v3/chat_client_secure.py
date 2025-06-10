@@ -606,6 +606,8 @@ def handle_encrypted_payload(payload: dict) -> None:
             is_authenticated = False
             client_username = None
             # Keep the secure channel open so a future signin can reuse it
+            session_keys.clear()
+            handshake_events.clear()
             console.print("<Server> Signed out successfully.", style="server")
         else:
             console.print(f"<Server> Signout failed: {msg_detail}", style="error")
@@ -810,7 +812,14 @@ def handle_signin(
 ) -> None:
     """Process the signin command using challenge-response."""
 
-    global client_username, auth_challenge_data, channel_sk
+    global client_username, auth_challenge_data, channel_sk, is_authenticated
+
+    if is_authenticated:
+        console.print(
+            f"<System> Already signed in as {client_username}. Please logout first.",
+            style="error",
+        )
+        return
 
     uname = prompt_text(
         "Enter username for signin: ", validator=get_username_validator()
