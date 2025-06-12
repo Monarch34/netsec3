@@ -605,8 +605,9 @@ def handle_encrypted_payload(payload: dict) -> None:
         if payload.get("success"):
             is_authenticated = False
             client_username = None
-            channel_sk = None
-            key_exchange_complete.clear()
+            # Keep the secure channel open so a future signin can reuse it
+            session_keys.clear()
+            handshake_events.clear()
             console.print("<Server> Signed out successfully.", style="server")
         else:
             console.print(f"<Server> Signout failed: {msg_detail}", style="error")
@@ -811,7 +812,14 @@ def handle_signin(
 ) -> None:
     """Process the signin command using challenge-response."""
 
-    global client_username, auth_challenge_data
+    global client_username, auth_challenge_data, channel_sk, is_authenticated
+
+    if is_authenticated:
+        console.print(
+            f"<System> Already signed in as {client_username}. Please logout first.",
+            style="error",
+        )
+        return
 
     uname = prompt_text(
         "Enter username for signin: ", validator=get_username_validator()
@@ -886,6 +894,7 @@ def handle_signin(
                     style="error",
                 )
                 client_username = None
+                channel_sk = None
         except Exception as exc:
             console.print(f"<System> Error: {exc}", style="error")
             logging.error(
@@ -894,6 +903,7 @@ def handle_signin(
                 exc_info=True,
             )
             client_username = None
+            channel_sk = None
     elif auth_successful_event.is_set():
         client_username = None
         return
@@ -903,10 +913,11 @@ def handle_signin(
             style="error",
         )
         client_username = None
+        channel_sk = None
 
 
 def handle_logout(sock: socket.socket, server_address: tuple[str, int]) -> None:
-    """Sign out from the server and drop the secure channel."""
+    """Sign out from the server while keeping the secure channel open."""
 
     global is_authenticated, client_username, channel_sk
 
@@ -925,6 +936,9 @@ def handle_logout(sock: socket.socket, server_address: tuple[str, int]) -> None:
         time.sleep(0.1)
     if not logout_ack_event.is_set():
         console.print("<System> Logout timed out.", style="error")
+    else:
+        # Leave the channel key intact so the connection remains usable
+        pass
 
 
 def handle_users(sock: socket.socket, server_address: tuple[str, int]) -> None:

@@ -310,10 +310,10 @@ def server(port, stop_event=None):
                 server_utils.send_encrypted_response(sock, client_addr, current_channel_sk, auth_res_payload)
 
             elif not session.get("username"):  # Check for authenticated commands below
-                logging.warning(f"Unauthenticated command '{command_header}' from {client_addr}. Denying.")
-                server_utils.send_encrypted_response(sock, client_addr, current_channel_sk,
-                                        {"type": "AUTH_RESULT", "success": False,
-                                         "detail": "Not signed in. Please signin first."})
+                logging.warning(
+                    f"Unauthenticated command '{command_header}' from {client_addr}. Ignoring."
+                )
+                continue
 
             elif command_header == "GREET":
                 logging.info(f"Processing GREET from '{session['username']}'@{client_addr}")
@@ -349,8 +349,7 @@ def server(port, stop_event=None):
                                          "detail": "Signed out."})
                 if username:
                     server_utils.notify_user_logout(sock, username, client_sessions)
-                # Remove the session key after logout so the client must re-handshake
-                client_sessions.pop(client_addr, None)
+                # Keep the session entry so the secure channel remains active
 
             elif command_header == "SECURE_MESSAGE":
                 to_user = req_payload.get("to_user")
