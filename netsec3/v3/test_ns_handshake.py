@@ -99,19 +99,22 @@ def test_needham_schroeder_chat(tmp_path):
         # send ticket to bob
         nonce2 = os.urandom(NONCE_SIZE)
         enc_n2 = crypto_utils.encrypt_aes_gcm_with_nonce(kab, nonce2, nonce2)
-        sock1.sendto(
-            f"NS_TICKET:bob:alice:{ticket}:{enc_n2}".encode(), SERVER_ADDR
-        )
+        ticket_plain = f"bob:alice:{ticket}:{enc_n2}".encode()
+        ticket_enc = crypto_utils.encrypt_aes_gcm(sk1, ticket_plain)
+        sock1.sendto(f"NS_TICKET:{ticket_enc}".encode(), SERVER_ADDR)
 
         data, _ = sock2.recvfrom(4096)
-        parts = data.decode().split(":", 4)
-        assert parts[0] == "NS_TICKET" and parts[1] == "bob"
-        ticket_plain = crypto_utils.decrypt_aes_gcm(sk2, parts[3])
-        tdata = json.loads(ticket_plain.decode())
+        parts = data.decode().split(":", 1)
+        assert parts[0] == "NS_TICKET"
+        ticket_dec = crypto_utils.decrypt_aes_gcm(sk2, parts[1])
+        tparts = ticket_dec.decode().split(":", 3)
+        assert tparts[0] == "bob"
+        ticket_plain_inner = crypto_utils.decrypt_aes_gcm(sk2, tparts[2])
+        tdata = json.loads(ticket_plain_inner.decode())
         assert tdata.get("sender") == "alice"
         kab2 = base64.b64decode(tdata["K_AB"])
         assert kab2 == kab
-        nonce2_recv = crypto_utils.decrypt_aes_gcm(kab2, parts[4])
+        nonce2_recv = crypto_utils.decrypt_aes_gcm(kab2, tparts[3])
         assert nonce2_recv == nonce2
 
         nonce3 = os.urandom(NONCE_SIZE)
@@ -119,40 +122,50 @@ def test_needham_schroeder_chat(tmp_path):
         auth_payload = crypto_utils.encrypt_aes_gcm_with_nonce(
             kab2, nonce3, n2_minus + nonce3
         )
-        sock2.sendto(
-            f"NS_AUTH:alice:bob:{auth_payload}".encode(), SERVER_ADDR
-        )
+        auth_plain_msg = f"alice:bob:{auth_payload}".encode()
+        auth_enc = crypto_utils.encrypt_aes_gcm(sk2, auth_plain_msg)
+        sock2.sendto(f"NS_AUTH:{auth_enc}".encode(), SERVER_ADDR)
 
         data, _ = sock1.recvfrom(4096)
-        parts = data.decode().split(":", 3)
-        assert parts[0] == "NS_AUTH" and parts[2] == "bob"
-        auth_plain = crypto_utils.decrypt_aes_gcm(kab, parts[3])
+        parts = data.decode().split(":", 1)
+        assert parts[0] == "NS_AUTH"
+        auth_dec = crypto_utils.decrypt_aes_gcm(sk1, parts[1])
+        aparts = auth_dec.decode().split(":", 2)
+        assert aparts[0] == "alice"
+        auth_plain = crypto_utils.decrypt_aes_gcm(kab, aparts[2])
         n2_chk = auth_plain[:NONCE_SIZE]
         nonce3_recv = auth_plain[NONCE_SIZE:]
         assert n2_chk == n2_minus
         n3_minus = (int.from_bytes(nonce3_recv, "big") - 1).to_bytes(NONCE_SIZE, "big")
         fin_blob = crypto_utils.encrypt_aes_gcm_with_nonce(kab, nonce3_recv, n3_minus)
-        sock1.sendto(
-            f"NS_FIN:bob:alice:{fin_blob}".encode(), SERVER_ADDR
-        )
+        fin_plain_msg = f"bob:alice:{fin_blob}".encode()
+        fin_enc = crypto_utils.encrypt_aes_gcm(sk1, fin_plain_msg)
+        sock1.sendto(f"NS_FIN:{fin_enc}".encode(), SERVER_ADDR)
 
         data, _ = sock2.recvfrom(4096)
-        parts = data.decode().split(":", 3)
-        assert parts[0] == "NS_FIN" and parts[1] == "bob"
-        fin_plain = crypto_utils.decrypt_aes_gcm(kab2, parts[3])
+        parts = data.decode().split(":", 1)
+        assert parts[0] == "NS_FIN"
+        fin_dec = crypto_utils.decrypt_aes_gcm(sk2, parts[1])
+        fparts = fin_dec.decode().split(":", 2)
+        assert fparts[0] == "bob"
+        fin_plain = crypto_utils.decrypt_aes_gcm(kab2, fparts[2])
         assert fin_plain == n3_minus
 
         # send chat message after handshake
         chat_nonce = os.urandom(NONCE_SIZE)
         chat_ct = crypto_utils.encrypt_aes_gcm_detached(kab, chat_nonce, b"hi")
-        msg = f"CHAT:bob:alice:{base64.b64encode(chat_nonce).decode()}:{chat_ct}"
-        sock1.sendto(msg.encode(), SERVER_ADDR)
+        msg_plain = f"bob:alice:{base64.b64encode(chat_nonce).decode()}:{chat_ct}".encode()
+        msg_enc = crypto_utils.encrypt_aes_gcm(sk1, msg_plain)
+        sock1.sendto(f"CHAT:{msg_enc}".encode(), SERVER_ADDR)
 
         data, _ = sock2.recvfrom(4096)
-        parts = data.decode().split(":", 4)
-        assert parts[0] == "CHAT" and parts[2] == "alice"
+        parts = data.decode().split(":", 1)
+        assert parts[0] == "CHAT"
+        chat_dec = crypto_utils.decrypt_aes_gcm(sk2, parts[1])
+        cparts = chat_dec.decode().split(":", 3)
+        assert cparts[0] == "bob" and cparts[1] == "alice"
         chat_pt = crypto_utils.decrypt_aes_gcm_detached(
-            kab2, base64.b64decode(parts[3]), parts[4]
+            kab2, base64.b64decode(cparts[2]), cparts[3]
         )
         assert chat_pt == b"hi"
     finally:

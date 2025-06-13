@@ -310,12 +310,21 @@ def send_secure_text(sock: socket.socket, server_address: tuple[str, int],
         logging.error("Error sending %s: %s", command_header, exc, exc_info=True)
 
 
-def send_relay_message(sock: socket.socket, server_address: tuple[str, int],
-                       command_header: str, *parts: str) -> None:
-    """Send a plaintext message via the server relay to another peer."""
-    msg = f"{command_header}:{':'.join(parts)}"
-    sock.sendto(msg.encode("utf-8"), server_address)
-    logging.debug("Relayed %s message", command_header)
+def send_relay_message(
+    sock: socket.socket, server_address: tuple[str, int], command_header: str, *parts: str
+) -> None:
+    """Encrypt relay payload with ChannelSK and send to the server."""
+    if not channel_sk:
+        console.print("! Cannot relay: Secure channel not established.", style="error")
+        return
+    try:
+        plain = ":".join(parts).encode("utf-8")
+        enc_blob = crypto_utils.encrypt_aes_gcm(channel_sk, plain)
+        msg = f"{command_header}:{enc_blob}"
+        sock.sendto(msg.encode("utf-8"), server_address)
+        logging.debug("Relayed %s message", command_header)
+    except Exception as exc:  # pragma: no cover - network failures
+        logging.error("Error sending relay %s: %s", command_header, exc, exc_info=True)
 
 
 def request_session_key(sock: socket.socket, server_address: tuple[str, int],
@@ -679,7 +688,7 @@ def receive_messages(sock: socket.socket) -> None:
                 )
                 continue
 
-            parts = message_str.split(":", 4)
+            parts = message_str.split(":", 2)
             header = parts[0]
             if header == "NS_RESP" and len(parts) >= 3:
                 handle_ns_resp(sock, server_addr_global, parts[1], parts[2])
@@ -693,42 +702,35 @@ def receive_messages(sock: socket.socket) -> None:
                 with patch_stdout(raw=True):
                     console.print(f"<System> Handshake with {peer} failed: {reason}.", style="error")
                 continue
-            if header == "NS_TICKET" and len(parts) >= 5:
-                handle_ns_ticket(sock, server_addr_global, parts[2], parts[3], parts[4])
-                continue
-            if header == "NS_AUTH" and len(parts) >= 4:
-                complete_ns_auth(sock, server_addr_global, parts[2], parts[3])
-                continue
-            if header == "NS_FIN" and len(parts) >= 4:
-                handle_ns_fin(parts[2], parts[3])
-                continue
-            if header == "CHAT" and len(parts) >= 5:
-                sender = parts[2]
-                nonce = base64.b64decode(parts[3])
-                ciphertext = parts[4]
-                entry = session_keys.get(sender)
-                if entry and entry.get("key"):
-                    try:
-                        pt = crypto_utils.decrypt_aes_gcm_detached(entry["key"], nonce, ciphertext)
-                        ts = datetime.now().strftime("%H:%M:%S")
-                        with patch_stdout(raw=True):
-                            console.print(f"[{ts}] <{sender}> {pt.decode()}", style="server")
-                    except Exception as exc:
-                        logging.warning("Failed to decrypt CHAT from %s: %s", sender, exc)
-                continue
-            if header == "BCAST" and len(parts) >= 5:
-                sender = parts[2]
-                nonce = base64.b64decode(parts[3])
-                ciphertext = parts[4]
-                entry = session_keys.get(sender)
-                if entry and entry.get("key"):
-                    try:
-                        pt = crypto_utils.decrypt_aes_gcm_detached(entry["key"], nonce, ciphertext)
-                        ts = datetime.now().strftime("%H:%M:%S")
-                        with patch_stdout(raw=True):
-                            console.print(f"[{ts}] <Bcast {sender}> {pt.decode()}", style="server")
-                    except Exception as exc:
-                        logging.warning("Failed to decrypt BCAST from %s: %s", sender, exc)
+            if header in {"NS_TICKET", "NS_AUTH", "NS_FIN", "CHAT", "BCAST"} and len(parts) == 2:
+                try:
+                    plain = crypto_utils.decrypt_aes_gcm(channel_sk, parts[1]).decode()
+                except Exception as exc:
+                    logging.warning("Failed to decrypt %s payload: %s", header, exc)
+                    continue
+                subparts = plain.split(":")
+                if header == "NS_TICKET" and len(subparts) >= 4:
+                    handle_ns_ticket(sock, server_addr_global, subparts[1], subparts[2], subparts[3])
+                elif header == "NS_AUTH" and len(subparts) >= 3:
+                    complete_ns_auth(sock, server_addr_global, subparts[1], subparts[2])
+                elif header == "NS_FIN" and len(subparts) >= 3:
+                    handle_ns_fin(subparts[1], subparts[2])
+                elif header in {"CHAT", "BCAST"} and len(subparts) >= 4:
+                    sender = subparts[1]
+                    nonce = base64.b64decode(subparts[2])
+                    ciphertext = subparts[3]
+                    entry = session_keys.get(sender)
+                    if entry and entry.get("key"):
+                        try:
+                            pt = crypto_utils.decrypt_aes_gcm_detached(entry["key"], nonce, ciphertext)
+                            ts = datetime.now().strftime("%H:%M:%S")
+                            with patch_stdout(raw=True):
+                                if header == "CHAT":
+                                    console.print(f"[{ts}] <{sender}> {pt.decode()}", style="server")
+                                else:
+                                    console.print(f"[{ts}] <Bcast {sender}> {pt.decode()}", style="server")
+                        except Exception as exc:
+                            logging.warning("Failed to decrypt %s from %s: %s", header, sender, exc)
                 continue
 
             try:
