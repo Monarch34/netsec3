@@ -135,12 +135,23 @@ def relay_raw(
     sock: Any,
     header: str,
     sender_addr: Tuple[str, int],
-    raw_blob: str,
+    enc_blob: str,
     client_sessions: Dict[Tuple[str, int], Dict[str, Any]],
     active_usernames: Dict[str, Tuple[str, int]],
 ) -> None:
-    """Relay an encrypted blob between two clients."""
-    target, _, rest = raw_blob.partition(":")
+    """Decrypt relay payload from sender and re-encrypt for recipient."""
+    sender_sess = client_sessions.get(sender_addr)
+    if not sender_sess or not sender_sess.get("channel_sk"):
+        logging.warning("Cannot relay %s from unknown sender %s", header, sender_addr)
+        return
+    try:
+        plain_bytes = crypto_utils.decrypt_aes_gcm(sender_sess["channel_sk"], enc_blob)
+        plain = plain_bytes.decode()
+    except Exception as exc:
+        logging.warning("Failed to decrypt %s from %s: %s", header, sender_addr, exc)
+        return
+
+    target, _, rest = plain.partition(":")
     if not rest:
         logging.warning("Malformed %s from %s", header, sender_addr)
         return
@@ -149,12 +160,16 @@ def relay_raw(
     if not (target_addr and target_sess and target_sess.get("channel_sk")):
         logging.info("%s target %s not found", header, target)
         return
-    sock.sendto(f"{header}:{raw_blob}".encode("utf-8"), target_addr)
-    logging.debug("Forwarded %s to %s: %s", header, target, raw_blob)
-    sender_user = client_sessions.get(sender_addr, {}).get("username", sender_addr)
-    logging.info(
-        "Relayed %s from %s to %s (len=%d)", header, sender_user, target, len(raw_blob)
-    )
+    try:
+        enc_for_target = crypto_utils.encrypt_aes_gcm(target_sess["channel_sk"], plain_bytes)
+        sock.sendto(f"{header}:{enc_for_target}".encode("utf-8"), target_addr)
+        logging.debug("Forwarded %s to %s", header, target)
+        sender_user = sender_sess.get("username", sender_addr)
+        logging.info(
+            "Relayed %s from %s to %s (len=%d)", header, sender_user, target, len(enc_blob)
+        )
+    except Exception as exc:
+        logging.error("Error relaying %s from %s to %s: %s", header, sender_addr, target_addr, exc)
 
 
 # ---------------------------------------------------------------------------
